@@ -10,6 +10,13 @@ final class ClipboardMonitor {
     private let logger: ClipFixLogger
     private let onClean: (@MainActor (String) -> Void)?
 
+    // Track the last terminal app that was frontmost, so we can still
+    // clean clipboard contents even if the user switches apps before
+    // the timer fires (the common case: copy in terminal, Cmd+Tab, paste)
+    private var lastTerminalBundleID: String?
+    private var lastTerminalName: String?
+    private var observer: NSObjectProtocol?
+
     init(config: ClipFixConfig, logger: ClipFixLogger, onClean: (@MainActor (String) -> Void)? = nil) {
         self.config = config
         self.logger = logger
@@ -18,7 +25,34 @@ final class ClipboardMonitor {
     }
 
     func start() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        // Track frontmost app changes so we know which app was active when a copy happened
+        observer = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if let app = NSWorkspace.shared.frontmostApplication {
+                    let bundleID = app.bundleIdentifier ?? ""
+                    if self.config.terminalBundleIDs.contains(bundleID) {
+                        self.lastTerminalBundleID = bundleID
+                        self.lastTerminalName = app.localizedName
+                    }
+                }
+            }
+        }
+
+        // Seed with current frontmost app
+        if let app = NSWorkspace.shared.frontmostApplication {
+            let bundleID = app.bundleIdentifier ?? ""
+            if config.terminalBundleIDs.contains(bundleID) {
+                lastTerminalBundleID = bundleID
+                lastTerminalName = app.localizedName
+            }
+        }
+
+        timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.checkClipboard()
             }
@@ -29,6 +63,19 @@ final class ClipboardMonitor {
     func stop() {
         timer?.invalidate()
         timer = nil
+        if let observer = observer {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        observer = nil
+    }
+
+    private func handleAppActivation(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        let bundleID = app.bundleIdentifier ?? ""
+        if config.terminalBundleIDs.contains(bundleID) {
+            lastTerminalBundleID = bundleID
+            lastTerminalName = app.localizedName
+        }
     }
 
     private func checkClipboard() {
@@ -37,7 +84,21 @@ final class ClipboardMonitor {
         lastChangeCount = currentCount
 
         guard let text = pasteboard.string(forType: .string) else { return }
-        guard isTerminalFrontmost() else { return }
+
+        // Check if a terminal is currently frontmost OR was recently frontmost
+        // (handles the common case: copy in terminal, quickly Cmd+Tab to paste)
+        let isTerminal = isTerminalFrontmost()
+        guard isTerminal || lastTerminalBundleID != nil else { return }
+
+        let appName: String
+        if isTerminal {
+            appName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown"
+        } else {
+            appName = lastTerminalName ?? "Unknown"
+            // Clear the last terminal — we've used it for one clipboard event
+            lastTerminalBundleID = nil
+            lastTerminalName = nil
+        }
 
         let cleaned = ClipFixCleaner.clean(text)
         guard cleaned != text else { return }
@@ -51,7 +112,7 @@ final class ClipboardMonitor {
         lastChangeCount = pasteboard.changeCount // Don't re-trigger on our own write
 
         try? logger.log(
-            app: frontmostAppName(),
+            app: appName,
             original: text,
             cleaned: cleaned,
             linesBefore: linesBefore,
@@ -65,9 +126,5 @@ final class ClipboardMonitor {
             return false
         }
         return config.terminalBundleIDs.contains(bundleID)
-    }
-
-    private func frontmostAppName() -> String {
-        return NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown"
     }
 }
