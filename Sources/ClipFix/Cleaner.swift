@@ -110,8 +110,9 @@ enum ClipFixCleaner {
         let nonEmpty = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard nonEmpty.count > 1 else { return false }
         let indents = nonEmpty.map { leadingWhitespaceCount($0) }
-        let uniqueIndents = Set(indents)
-        return uniqueIndents.count > 1
+        let minIndent = indents.min() ?? 0
+        let maxIndent = indents.max() ?? 0
+        return (maxIndent - minIndent) >= 2
     }
 
     private static func startsWithCommandVerb(_ line: String) -> Bool {
