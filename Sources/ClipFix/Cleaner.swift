@@ -23,23 +23,26 @@ enum ClipFixCleaner {
             return stripCommonIndent(lines)
         }
 
-        // Check for backslash continuations — these naturally have varying
-        // indentation so must be detected before the varying-indent code check
+        // Check for backslash continuations (single block, no blank lines)
         if containsBackslashContinuations(lines) {
             return cleanParagraph(lines)
         }
 
-        // Check for varying indentation (code) before paragraph splitting
-        if hasVaryingIndentation(lines) {
-            return stripCommonIndent(lines)
-        }
-
         // Process paragraphs (split on blank lines)
+        // This MUST come before the varying-indentation check so that
+        // mixed content (prose + indented code blocks separated by blank lines)
+        // gets each paragraph cleaned independently rather than treating the
+        // whole thing as code.
         let paragraphs = splitIntoParagraphs(lines)
 
         if paragraphs.count > 1 {
             let cleaned = paragraphs.map { cleanParagraph($0) }
             return cleaned.joined(separator: "\n\n")
+        }
+
+        // Single block with varying indentation = code, preserve structure
+        if hasVaryingIndentation(lines) {
+            return stripCommonIndent(lines)
         }
 
         // Single block — clean it
