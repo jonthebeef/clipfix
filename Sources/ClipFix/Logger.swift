@@ -29,6 +29,9 @@ final class ClipFixLogger: Sendable {
     }
 
     func recent(count: Int = 20) throws -> [String] {
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            return []
+        }
         let contents = try String(contentsOf: file, encoding: .utf8)
         let lines = contents.components(separatedBy: .newlines).filter { !$0.isEmpty }
         return Array(lines.suffix(count))

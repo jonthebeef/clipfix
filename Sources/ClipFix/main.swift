@@ -81,9 +81,6 @@ func setNotifications(_ value: String?) throws {
     config.notificationsEnabled = (value == "on")
     try config.save(to: ClipFixPaths.configFile)
     print("Notifications \(value)")
-    if value == "on" {
-        ClipFixNotifier.requestPermission()
-    }
 }
 
 func showLog() throws {
